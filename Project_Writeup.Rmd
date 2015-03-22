@@ -138,8 +138,7 @@ oose
 
 Using Generalized Boosted Model, the model accuracy is about 96.47% and the out-of-sample error is about 3.53%. 
 
-### 4. Model Selection
-
+#### (e) Model Selection
 From the accuracy results for the two non-linear regression models above, the Random Forest Model performs better with a relatively high accuracy (99.34% vs 96.47% by Generalized Boosted Model/GBM). Coupled with higher accuracy, the Random Forest Model also runs faster than GBM (5 min vs 12 min for a 4-core computer). Hence, we choose the Random Forest Model over Generalized Boosted Model, and use it to predict the "classe" variable in the testing set which is downloaded from the source and cleansed in this project. The prediction is found at the "results" folder.
 
 Refer to `Appendix: Figure 3 - Decision Tree Visualization` for an overview of the prediction paths by the Random Forest Model. 
