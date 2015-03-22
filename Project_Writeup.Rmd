@@ -1,0 +1,184 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Charmaine Ang"
+date: "16-22 March, 2015"
+output: html_document
+---
+
+### Executive Summary
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit, it is now possible to collect a large amount of data about personal activity relatively inexpensively. This project uses data collected by accelerometers on the belt, forearm, arm, and dumbell of 6 participants. These participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The goal of this project is to predict the manner in which the participants did the exercise; this is the "classe" variable in the training set. The project aims to find the other relevant variables to predict the "classe" outcome. Through the model fiting and accuracy validation for Random Forest Model and Generalized Boosted Model, the former performs faster (5 min vs 12 min for a 4-core computer) and better with a relatively high accuracy (99.34% vs 96.47%). Hence, Random Forest Model is choosen  to predict the manner in which the participants did the exercise. 
+
+### 1. Getting Data
+
+The **Weight Lifting Exercise Dataset** for this project come from this source: <http://groupware.les.inf.puc-rio.br/har> which contains training and testing datasets.
+
+```{r download}
+trainUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv" # Training Dataset
+testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"  # Testing Dataset
+trainFile <- "./data/pml-training.csv"
+testFile  <- "./data/pml-testing.csv"
+
+if (!file.exists("./data")) {dir.create("./data")}
+if (!file.exists(trainFile)) {download.file(trainUrl, destfile=trainFile)}
+if (!file.exists(testFile)) {download.file(testUrl, destfile=testFile)}
+
+trainRaw <- read.csv(file=trainFile, header=TRUE, sep=",", na.strings=c("NA","#DIV/0!",""))
+testRaw <- read.csv(file=testFile, header=TRUE, sep=",", na.strings=c("NA","#DIV/0!",""))
+```
+
+```{r library, results='hide', message=FALSE, warning=FALSE}
+# for creating predictive models
+library(caret); library(randomForest); library(gbm); library(rpart); library(rpart.plot)
+
+# for multi-core and parallel processing
+library(cluster)
+library(parallel)
+library(doSNOW)
+coreNumber=max(detectCores(),1)
+cluster=makeCluster(coreNumber, type = "SOCK",outfile="")
+registerDoSNOW(cluster)
+```
+
+```{r cpu}
+print(paste("Number of core-processors for the computer used in this project: ", coreNumber))
+```
+
+### 2. Cleaning Data
+As the raw training and testing datasets come from the same data population, we assumed that data exploration of training data is representative of teting data. When we explore the training data (`Appendix: Figure 1 - Explore Raw Data`), we observed that the dataset contains **19226** observations with **160** variables, and some variables contains majority of NAs. Hence, this step removes irrelevant variables (such as NAs, ID, etc) in both training and testing datasets.
+
+#### (a) Level 1 Cleaning via nearZeroVar from caret
+```{r cleanL1}
+nzv_cols <- nearZeroVar(trainRaw)
+if (length(nzv_cols) > 0) { trainClean1 <- trainRaw[,-nzv_cols] }
+
+nzv_cols <- nearZeroVar(testRaw)
+if (length(nzv_cols) > 0) { testClean1 <- testRaw[,-nzv_cols] }
+```
+
+#### (b) Level 2 Cleaning via user defined function
+```{r cleanL2}
+cleanData <- function(df) {
+  idx.keep <- !sapply(df, function(x) any(is.na(x)))
+  df <- df[, idx.keep]
+  idx.keep <- !sapply(df, function(x) any(x==""))
+  df <- df[, idx.keep]
+
+  # Remove irrelevant predictor variables
+  col.rm <- c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp",
+              "new_window", "num_window")
+  idx.rm <- which(colnames(df) %in% col.rm)
+  df <- df[, -idx.rm]
+  return(df)
+}
+
+trainClean2 <- cleanData(trainClean1)
+testClean2 <- cleanData(testClean1)
+```
+
+After data cleaning, the number of relevant variables in the datasets is now **19226** observations with **53** (`Appendix: Figure 2 - Explore Clean TrainData`).
+   
+### 3. Partition Data for Machine Learning
+#### (a) Prepare Data: 70% train, 30% test
+```{r Partition}
+set.seed(1234) # Consistency for reproducible results.
+inTrain <- createDataPartition(trainClean2$classe, p=0.70, list=F)
+trainData <- trainClean2[inTrain, ]
+testData <- trainClean2[-inTrain, ]
+```
+
+### 4. Model Fitting and Selection
+With the large number of variables (about 50) in the datasets, it is more accurate to perform non-linear regression analysis, in which the observational data (i.e. classe) is a nonlinear combination of the model parameters and depends on one or more independent variables. In the spirit of time and accuracy, this section only fits 2 common and robust non-linear machine learning models (Random Forest and Generalized Boosted Model) and then choose the most accurate model. A 5-fold cross validation is applied to validate the model. To prevent over-fitting, ensamble of models is not used.
+
+```{r ModelParameters}
+modelControl <- trainControl(method="cv", 5)
+```
+
+#### (a) Model Fitting: Random Forest with Train Data
+```{r RandomForest_Train, cache=TRUE}
+ptm = proc.time()
+modelRF <- train(classe ~ ., data=trainData, method="rf", trControl=modelControl, ntree=100)
+proc.time() - ptm
+modelRF
+```
+
+#### (b) Model Validation: Random Forest with Test Data
+```{r RandomForest_Test, cache=TRUE}
+predictRF <- predict(modelRF, testData)
+confusionMatrix(testData$classe, predictRF)
+
+accuracy <- postResample(predictRF, testData$classe)
+accuracy
+
+oose <- 1 - as.numeric(confusionMatrix(testData$classe, predictRF)$overall[1]) # out-of-sample error
+oose
+```
+
+Using Random Forest Model, the model accuracy is about 99.4% and the out-of-sample error is about 0.6%. 
+
+#### (c) Model Fitting: Generalized Boosted Model with Train Data
+```{r GBM_Train, cache=TRUE}
+ptm = proc.time()
+modelGBM = train(classe ~ ., data=trainData, method="gbm", verbose=F, trControl=modelControl) 
+proc.time() - ptm
+modelGBM
+```
+
+#### (d) Model Validation: Generalized Boosted Model with Test Data
+```{r GBM_Test, cache=TRUE}
+predictGBM <- predict(modelGBM, testData)
+confusionMatrix(testData$classe, predictGBM)
+
+accuracy <- postResample(predictGBM, testData$classe)
+accuracy
+
+oose <- 1 - as.numeric(confusionMatrix(testData$classe, predictGBM)$overall[1]) # out-of-sample error
+oose
+```
+
+Using Generalized Boosted Model, the model accuracy is about 96.47% and the out-of-sample error is about 3.53%. 
+
+### 4. Model Selection
+
+From the accuracy results for the two non-linear regression models above, the Random Forest Model performs better with a relatively high accuracy (99.34% vs 96.47% by Generalized Boosted Model/GBM). Coupled with higher accuracy, the Random Forest Model also runs faster than GBM (5 min vs 12 min for a 4-core computer). Hence, we choose the Random Forest Model over Generalized Boosted Model, and use it to predict the "classe" variable in the testing set which is downloaded from the source and cleansed in this project. The prediction is found at the "results" folder.
+
+Refer to `Appendix: Figure 3 - Decision Tree Visualization` for an overview of the prediction paths by the Random Forest Model. 
+
+### 5. Perform Prediction on the Testing Dataset from Source
+```{r Prediction}
+answers <- predict(modelRF, newdata=testClean2)
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+      filename = paste0("./results/problem_id_",i,".txt")
+      write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+if (!file.exists("./results")) {dir.create("./results")}
+pml_write_files(answers)
+```
+
+### 6. Conclusion
+
+The Random Forest Model performs faster (about 4 min on a 4-core computer) and better with relatively high accuracy (above 99%), relatively low out-of-sample error (below 1%). Hence, it is used to predict the "classe" variable in the testing set which is downloaded from the source and cleansed in this project.
+
+### -------------------------------------------------- Appendix --------------------------------------------------
+#### Figure 1: Explore Raw Data
+```{r Fig1}
+str(trainRaw)
+summary(trainRaw)
+```
+
+#### Figure 2: Explore Clean Data
+```{r Fig2}
+str(trainClean2)
+str(testClean2)
+```
+
+#### Figure 3: Decision Tree Visualization
+```{r Fig3}
+treeModel <- rpart(classe ~ ., data=trainData, method="class")
+prp(treeModel) # fast plot
+```

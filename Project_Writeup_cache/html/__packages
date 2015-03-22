@@ -1,0 +1,14 @@
+base
+lattice
+ggplot2
+caret
+rpart
+randomForest
+survival
+gbm
+cluster
+foreach
+iterators
+snow
+doSNOW
+plyr
